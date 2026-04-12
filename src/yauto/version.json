@@ -1,0 +1,6 @@
+{
+  "version": "0.2.1",
+  "display_name": "yandex-auto-up by censorny",
+  "tagline": "Low-resource Yandex Cloud watchdog with a polished CLI panel",
+  "github_repo": "censorny/yandex-auto-up"
+}

@@ -1,0 +1,16 @@
+[Unit]
+Description=yandex auto up daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/yandex-auto-up/app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/yandex-auto-up/venv/bin/yauto-daemon
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
