@@ -35,7 +35,8 @@ class SelectelCloudClient:
             return False
 
     def list_projects(self) -> list[dict[str, Any]]:
-        token = self._get_token()
+        # Get account-scoped token for listing projects
+        token = self.token_provider.get_token(project_scoped=False)
         # Use resell v2 API to list projects
         url = "https://api.selvpc.ru/vpc/resell/v2/projects"
         response = self.http.get(url, headers={"X-Auth-Token": token})
