@@ -70,16 +70,30 @@ class SelectelCloudClient:
         # Get project-scoped token with catalog
         token_data = self.token_provider.get_token_with_catalog(project_id)
         token = token_data.get("token")
+        catalog = token_data.get("catalog", [])
+        
+        # Debug: print catalog
+        print(f"DEBUG: Service catalog has {len(catalog)} services")
+        for service in catalog:
+            if service.get("type") == "compute":
+                print(f"DEBUG: Found compute service: {service.get('name')}")
+                for endpoint in service.get("endpoints", []):
+                    print(f"DEBUG: Endpoint: region={endpoint.get('region')}, interface={endpoint.get('interface')}, url={endpoint.get('url')}")
         
         # Get compute endpoint from catalog
         compute_url = self._get_compute_endpoint(project_id)
         
         # OpenStack Nova API: GET /servers/detail
         url = f"{compute_url}/servers/detail"
+        print(f"DEBUG: Requesting servers from: {url}")
         response = self.http.get(url, headers={"X-Auth-Token": token})
+        print(f"DEBUG: Response status: {response.status_code}")
+        print(f"DEBUG: Response body: {response.text[:500]}")
         response.raise_for_status()
         data = response.json()
-        return data.get("servers", [])
+        servers = data.get("servers", [])
+        print(f"DEBUG: Found {len(servers)} servers")
+        return servers
 
     def get_server(self, project_id: str, server_id: str) -> dict[str, Any]:
         token_data = self.token_provider.get_token_with_catalog(project_id)
