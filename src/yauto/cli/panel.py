@@ -647,20 +647,28 @@ def _build_selectel_client(config_repo: ConfigRepository, language: str) -> Sele
     if not creds_file.exists():
         console.print(f"[red]Selectel credentials file not found: {creds_file}[/red]")
         console.print(f"[yellow]Create a JSON file with: username, password, account_id, project_id[/yellow]")
+        _pause(language)
         return None
     
     try:
+        console.print(f"[cyan]Reading credentials from {creds_file}...[/cyan]")
         client = SelectelCloudClient.from_credentials_file(creds_file)
         console.print(f"[cyan]Authenticating with Selectel...[/cyan]")
         if not client.ensure_authenticated():
             console.print(f"[red]Failed to authenticate with Selectel[/red]")
+            console.print(f"[yellow]Check your credentials in {creds_file}[/yellow]")
+            _pause(language)
             return None
-        console.print(f"[green]Successfully authenticated with Selectel[/green]")
+        console.print(f"[green]Successfully authenticated with Selectel![/green]")
         return client
     except Exception as exc:
-        console.print(f"[red]Selectel auth failed: {exc}[/red]")
+        console.print(f"[red]Selectel auth failed:[/red]")
+        console.print(f"[red]{exc}[/red]")
+        console.print()
+        console.print(f"[yellow]Full error details:[/yellow]")
         import traceback
         console.print(f"[grey70]{traceback.format_exc()}[/grey70]")
+        _pause(language)
         return None
 
 
@@ -670,13 +678,18 @@ def _choose_selectel_project(client: SelectelCloudClient, language: str) -> str 
         projects = client.list_projects()
         console.print(f"[green]Found {len(projects)} project(s)[/green]")
     except Exception as exc:
-        console.print(f"[red]Failed to list Selectel projects: {exc}[/red]")
+        console.print(f"[red]Failed to list Selectel projects:[/red]")
+        console.print(f"[red]{exc}[/red]")
+        console.print()
+        console.print(f"[yellow]Full error details:[/yellow]")
         import traceback
         console.print(f"[grey70]{traceback.format_exc()}[/grey70]")
+        _pause(language)
         return None
     
     if not projects:
         console.print(f"[yellow]No Selectel projects found[/yellow]")
+        _pause(language)
         return None
     
     project = _pick_record(
@@ -698,9 +711,17 @@ def _import_profiles_from_selectel(
     language: str,
 ) -> None:
     try:
+        console.print(f"[cyan]Loading servers from project {project_id}...[/cyan]")
         servers = client.list_servers(project_id)
+        console.print(f"[green]Found {len(servers)} server(s)[/green]")
     except Exception as exc:
-        console.print(f"[red]Failed to list servers: {exc}[/red]")
+        console.print(f"[red]Failed to list servers:[/red]")
+        console.print(f"[red]{exc}[/red]")
+        console.print()
+        console.print(f"[yellow]Full error details:[/yellow]")
+        import traceback
+        console.print(f"[grey70]{traceback.format_exc()}[/grey70]")
+        _pause(language)
         return
     
     if not servers:
