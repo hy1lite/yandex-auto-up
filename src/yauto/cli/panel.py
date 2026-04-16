@@ -651,20 +651,28 @@ def _build_selectel_client(config_repo: ConfigRepository, language: str) -> Sele
     
     try:
         client = SelectelCloudClient.from_credentials_file(creds_file)
+        console.print(f"[cyan]Authenticating with Selectel...[/cyan]")
         if not client.ensure_authenticated():
             console.print(f"[red]Failed to authenticate with Selectel[/red]")
             return None
+        console.print(f"[green]Successfully authenticated with Selectel[/green]")
         return client
     except Exception as exc:
         console.print(f"[red]Selectel auth failed: {exc}[/red]")
+        import traceback
+        console.print(f"[grey70]{traceback.format_exc()}[/grey70]")
         return None
 
 
 def _choose_selectel_project(client: SelectelCloudClient, language: str) -> str | None:
     try:
+        console.print(f"[cyan]Loading Selectel projects...[/cyan]")
         projects = client.list_projects()
+        console.print(f"[green]Found {len(projects)} project(s)[/green]")
     except Exception as exc:
         console.print(f"[red]Failed to list Selectel projects: {exc}[/red]")
+        import traceback
+        console.print(f"[grey70]{traceback.format_exc()}[/grey70]")
         return None
     
     if not projects:
