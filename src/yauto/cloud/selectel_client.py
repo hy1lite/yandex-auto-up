@@ -36,11 +36,12 @@ class SelectelCloudClient:
 
     def list_projects(self) -> list[dict[str, Any]]:
         token = self._get_token()
-        url = "https://api.selvpc.ru/resell/v2/projects"
+        # Use resell v2 API to list projects
+        url = "https://api.selvpc.ru/vpc/resell/v2/projects"
         response = self.http.get(url, headers={"X-Auth-Token": token})
         response.raise_for_status()
         data = response.json()
-        return data.get("projects", {}).get("projects", [])
+        return data.get("projects", [])
 
     def list_servers(self, project_id: str) -> list[dict[str, Any]]:
         token = self._get_token()
