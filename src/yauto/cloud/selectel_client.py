@@ -107,12 +107,38 @@ class SelectelCloudClient:
     def get_server(self, project_id: str, server_id: str) -> dict[str, Any]:
         token_data = self.token_provider.get_token_with_catalog(project_id)
         token = token_data.get("token")
-        compute_url = self._get_compute_endpoint(project_id)
-        url = f"{compute_url}/servers/{server_id}"
-        response = self.http.get(url, headers={"X-Auth-Token": token})
-        response.raise_for_status()
-        data = response.json()
-        return data.get("server", {})
+        catalog = token_data.get("catalog", [])
+        
+        # Get all available regions
+        regions = self._get_all_regions_from_catalog(catalog)
+        
+        # Try to find server in each region
+        for region in regions:
+            # Find compute endpoint for this region
+            compute_url = None
+            for service in catalog:
+                if service.get("type") == "compute":
+                    for endpoint in service.get("endpoints", []):
+                        if endpoint.get("interface") == "public" and endpoint.get("region") == region:
+                            compute_url = endpoint.get("url", "")
+                            break
+                    if compute_url:
+                        break
+            
+            if not compute_url:
+                continue
+            
+            # Try to get server from this region
+            url = f"{compute_url}/servers/{server_id}"
+            try:
+                response = self.http.get(url, headers={"X-Auth-Token": token})
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("server", {})
+            except Exception:
+                continue
+        
+        return {}
 
     def get_server_status(self, project_id: str, server_id: str) -> str:
         server = self.get_server(project_id, server_id)
@@ -121,15 +147,41 @@ class SelectelCloudClient:
     def start_server(self, project_id: str, server_id: str) -> str:
         token_data = self.token_provider.get_token_with_catalog(project_id)
         token = token_data.get("token")
-        compute_url = self._get_compute_endpoint(project_id)
-        url = f"{compute_url}/servers/{server_id}/action"
-        response = self.http.post(
-            url,
-            headers={"X-Auth-Token": token, "Content-Type": "application/json"},
-            json={"os-start": None}
-        )
-        response.raise_for_status()
-        return server_id
+        catalog = token_data.get("catalog", [])
+        
+        # Get all available regions
+        regions = self._get_all_regions_from_catalog(catalog)
+        
+        # Try to start server in each region
+        for region in regions:
+            # Find compute endpoint for this region
+            compute_url = None
+            for service in catalog:
+                if service.get("type") == "compute":
+                    for endpoint in service.get("endpoints", []):
+                        if endpoint.get("interface") == "public" and endpoint.get("region") == region:
+                            compute_url = endpoint.get("url", "")
+                            break
+                    if compute_url:
+                        break
+            
+            if not compute_url:
+                continue
+            
+            # Try to start server in this region
+            url = f"{compute_url}/servers/{server_id}/action"
+            try:
+                response = self.http.post(
+                    url,
+                    headers={"X-Auth-Token": token, "Content-Type": "application/json"},
+                    json={"os-start": None}
+                )
+                if response.status_code in (200, 202):
+                    return server_id
+            except Exception:
+                continue
+        
+        raise RuntimeError(f"Failed to start server {server_id} in any region")
 
     @staticmethod
     def extract_primary_ip(server: dict[str, Any]) -> str:
