@@ -43,28 +43,53 @@ class SelectelCloudClient:
         data = response.json()
         return data.get("projects", [])
 
+    def _get_project_region(self, project_id: str) -> str:
+        """Get the region where the project is located."""
+        # Get account-scoped token to query project details
+        token = self.token_provider.get_token(project_scoped=False)
+        
+        # Query project details from resell API
+        url = f"https://api.selectel.ru/vpc/resell/v2/projects/{project_id}"
+        response = self.http.get(url, headers={"X-Auth-Token": token})
+        response.raise_for_status()
+        
+        project_data = response.json()
+        project = project_data.get("project", {})
+        
+        # Extract region from project quotas
+        # Selectel stores region info in quotas
+        quotas = project.get("quotas", {})
+        for quota in quotas.get("resources", []):
+            region = quota.get("region")
+            if region:
+                print(f"DEBUG: Project region detected: {region}")
+                return region
+        
+        # Fallback to default region
+        print(f"DEBUG: Could not detect project region, using default: {self.region}")
+        return self.region
+    
     def _get_compute_endpoint(self, project_id: str) -> str:
         """Get compute endpoint from service catalog for the project's region."""
         # Get project-scoped token which includes service catalog
         token_data = self.token_provider.get_token_with_catalog(project_id)
-        token = token_data.get("token")
         catalog = token_data.get("catalog", [])
         
-        # Find compute service endpoint
+        # Detect project region
+        project_region = self._get_project_region(project_id)
+        
+        # Find compute service endpoint for the project's region
         for service in catalog:
             if service.get("type") == "compute":
                 for endpoint in service.get("endpoints", []):
-                    if endpoint.get("interface") == "public":
+                    if endpoint.get("interface") == "public" and endpoint.get("region") == project_region:
                         url = endpoint.get("url", "")
-                        # OpenStack compute endpoint format: https://{region}.cloud.api.selcloud.ru/compute/v2.1/{project_id}
-                        # We need to use the URL as-is from catalog
+                        print(f"DEBUG: Using compute endpoint for region {project_region}: {url}")
                         return url
         
-        # Fallback: try to detect region from project and construct URL
-        # For Selectel, regions are: ru-1, ru-2, ru-3, ru-7, ru-8, ru-9, etc.
-        # Default to ru-3 if not specified
-        region = self.region or "ru-3"
-        return f"https://{region}.cloud.api.selcloud.ru/compute/v2.1/{project_id}"
+        # Fallback: construct URL from detected region
+        print(f"DEBUG: No endpoint found in catalog for region {project_region}, constructing URL")
+        return f"https://{project_region}.cloud.api.selcloud.ru/compute/v2.1"
 
     def list_servers(self, project_id: str) -> list[dict[str, Any]]:
         # Get project-scoped token with catalog
