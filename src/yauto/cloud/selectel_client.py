@@ -60,13 +60,22 @@ class SelectelCloudClient:
         
         catalog = response.json().get("catalog", [])
         
-        # Find compute service endpoint
+        # Find compute service endpoint for any region (prefer self.region if available)
+        compute_endpoints = []
         for service in catalog:
             if service.get("type") == "compute":
                 for endpoint in service.get("endpoints", []):
-                    if endpoint.get("interface") == "public" and endpoint.get("region") == self.region:
-                        self.compute_endpoint = endpoint.get("url")
-                        return self.compute_endpoint
+                    if endpoint.get("interface") == "public":
+                        compute_endpoints.append(endpoint)
+                        # Prefer specified region
+                        if endpoint.get("region") == self.region:
+                            self.compute_endpoint = endpoint.get("url")
+                            return self.compute_endpoint
+        
+        # If no endpoint for specified region, use first available
+        if compute_endpoints:
+            self.compute_endpoint = compute_endpoints[0].get("url")
+            return self.compute_endpoint
         
         # Fallback to default
         self.compute_endpoint = f"https://{self.region}.cloud.api.selcloud.ru/compute/v2.1"
