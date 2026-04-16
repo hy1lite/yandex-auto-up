@@ -54,3 +54,4 @@ echo ""
 
 echo "=== Update completed successfully! ==="
 echo "Run 'yauto' to open the panel"
+

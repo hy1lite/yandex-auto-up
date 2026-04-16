@@ -45,11 +45,39 @@ class SelectelCloudClient:
         data = response.json()
         return data.get("projects", [])
 
+    def _get_compute_endpoint(self) -> str:
+        """Get compute endpoint from service catalog."""
+        if self.compute_endpoint:
+            return self.compute_endpoint
+        
+        # Get project-scoped token and service catalog
+        token = self.token_provider.get_token(project_scoped=True)
+        
+        # Get service catalog from Keystone
+        url = "https://cloud.api.selcloud.ru/identity/v3/auth/catalog"
+        response = self.http.get(url, headers={"X-Auth-Token": token})
+        response.raise_for_status()
+        
+        catalog = response.json().get("catalog", [])
+        
+        # Find compute service endpoint
+        for service in catalog:
+            if service.get("type") == "compute":
+                for endpoint in service.get("endpoints", []):
+                    if endpoint.get("interface") == "public" and endpoint.get("region") == self.region:
+                        self.compute_endpoint = endpoint.get("url")
+                        return self.compute_endpoint
+        
+        # Fallback to default
+        self.compute_endpoint = f"https://{self.region}.cloud.api.selcloud.ru/compute/v2.1"
+        return self.compute_endpoint
+
     def list_servers(self, project_id: str) -> list[dict[str, Any]]:
         # Get project-scoped token
         token = self._get_token()
-        # Use OpenStack Nova API - project_id is in token scope, not URL
-        url = "https://cloud.api.selcloud.ru/compute/v2.1/servers/detail"
+        # Use discovered compute endpoint
+        compute_url = self._get_compute_endpoint()
+        url = f"{compute_url}/servers/detail"
         response = self.http.get(url, headers={"X-Auth-Token": token})
         response.raise_for_status()
         data = response.json()
