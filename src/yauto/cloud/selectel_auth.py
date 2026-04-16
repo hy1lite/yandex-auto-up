@@ -57,8 +57,7 @@ class SelectelTokenProvider:
         if project_scoped and creds.project_id:
             auth_payload["auth"]["scope"] = {
                 "project": {
-                    "id": creds.project_id,
-                    "domain": {"name": creds.account_id}
+                    "id": creds.project_id
                 }
             }
         else:

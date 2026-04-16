@@ -17,7 +17,8 @@ class SelectelCloudClient:
         self.region = region
         self.timeout = timeout
         self.http = httpx.Client(timeout=timeout, headers={"User-Agent": f"yauto/{__version__}"})
-        self.compute_url = f"https://api.selvpc.ru/servers/v2"
+        # Compute endpoint will be discovered from service catalog
+        self.compute_endpoint = None
 
     @classmethod
     def from_credentials_file(cls, credentials_file: Path, region: str = "ru-1", timeout: float = 10.0) -> SelectelCloudClient:
