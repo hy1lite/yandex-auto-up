@@ -86,6 +86,8 @@ class SelectelCloudClient:
                 continue
             
             # Try to list servers in this region
+            # Remove trailing slash from compute_url to avoid double slashes
+            compute_url = compute_url.rstrip('/')
             url = f"{compute_url}/servers/detail"
             try:
                 response = self.http.get(url, headers={"X-Auth-Token": token})
@@ -128,6 +130,9 @@ class SelectelCloudClient:
             if not compute_url:
                 continue
             
+            # Remove trailing slash to avoid double slashes
+            compute_url = compute_url.rstrip('/')
+            
             # Try to get server from this region
             url = f"{compute_url}/servers/{server_id}"
             try:
@@ -167,6 +172,9 @@ class SelectelCloudClient:
             
             if not compute_url:
                 continue
+            
+            # Remove trailing slash to avoid double slashes
+            compute_url = compute_url.rstrip('/')
             
             # Try to start server in this region
             url = f"{compute_url}/servers/{server_id}/action"
