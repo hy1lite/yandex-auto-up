@@ -36,6 +36,7 @@ class AppConfig(BaseModel):
     config_reload_seconds: int = Field(default=30, ge=5, le=3600)
     max_workers: int = Field(default=2, ge=1, le=8)
     service_account_file: str = "/etc/yandex-auto-up/keys"
+    selectel_credentials_file: str = "/etc/yandex-auto-up/selectel-credentials.json"
     profile_dir: str = "/etc/yandex-auto-up/profiles"
     state_file: str = "/var/lib/yandex-auto-up/state.json"
     events_file: str = "/var/lib/yandex-auto-up/events.jsonl"
@@ -58,8 +59,10 @@ class AppConfig(BaseModel):
 class VMProfile(BaseModel):
     profile_id: str = Field(default_factory=create_profile_id)
     name: str = Field(min_length=1, max_length=80)
+    provider: str = Field(default="yandex")  # "yandex" or "selectel"
     folder_id: str = Field(min_length=1)
     instance_id: str = Field(min_length=1)
+    project_id: str | None = None  # For Selectel
     check_host: str = Field(min_length=1)
     enabled: bool = True
     auto_start_stopped: bool = True
@@ -72,6 +75,14 @@ class VMProfile(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
+    @field_validator("provider")
+    @classmethod
+    def normalize_provider(cls, value: str) -> str:
+        normalized = value.lower().strip()
+        if normalized not in {"yandex", "selectel"}:
+            return "yandex"
+        return normalized
+
     def touch(self) -> None:
         self.updated_at = utc_now()
 
@@ -80,6 +91,13 @@ class ServiceAccountKey(BaseModel):
     id: str
     service_account_id: str
     private_key: str
+
+
+class SelectelCredentials(BaseModel):
+    username: str
+    password: str
+    account_id: str
+    project_id: str | None = None
 
 
 class VMRuntimeState(BaseModel):

@@ -17,8 +17,10 @@ from rich.text import Text
 
 from yauto import __display_name__, __tagline__, __version__
 from yauto.cloud.client import YandexCloudClient
+from yauto.cloud.selectel_client import SelectelCloudClient
 from yauto.cli.i18n import normalize_language, status_text, tr
 from yauto.cli.update_checker import get_update_status
+from yauto.cli.helpers import _parse_selection
 from yauto.config.repository import ConfigRepository
 from yauto.doctor import run_doctor
 from yauto.models import TelegramConfig, VMProfile
@@ -199,14 +201,15 @@ def manage_profiles_menu(
                 [
                     ("1", tr(language, "action_add_manual"), tr(language, "why_add_manual")),
                     ("2", tr(language, "action_import_cloud"), tr(language, "why_import_cloud")),
-                    ("3", tr(language, "action_edit_profile"), tr(language, "why_edit_profile")),
-                    ("4", tr(language, "action_toggle_profile"), tr(language, "why_toggle_profile")),
-                    ("5", tr(language, "action_delete_profile"), tr(language, "why_delete_profile")),
+                    ("3", tr(language, "action_import_selectel"), tr(language, "why_import_selectel")),
+                    ("4", tr(language, "action_edit_profile"), tr(language, "why_edit_profile")),
+                    ("5", tr(language, "action_toggle_profile"), tr(language, "why_toggle_profile")),
+                    ("6", tr(language, "action_delete_profile"), tr(language, "why_delete_profile")),
                     ("0", tr(language, "action_back"), tr(language, "why_back")),
                 ],
             )
         )
-        choice = Prompt.ask(tr(language, "select_action"), choices=["1", "2", "3", "4", "5", "0"], default="1")
+        choice = Prompt.ask(tr(language, "select_action"), choices=["1", "2", "3", "4", "5", "6", "0"], default="1")
         if choice == "1":
             add_manual_profile(config_repo, language=language)
         elif choice == "2":
@@ -220,10 +223,20 @@ def manage_profiles_menu(
                     client.close()
                 _pause(language)
         elif choice == "3":
-            edit_profile(config_repo, language=language)
+            selectel_client = _build_selectel_client(config_repo, language)
+            if selectel_client is not None:
+                try:
+                    project_id = _choose_selectel_project(selectel_client, language)
+                    if project_id:
+                        _import_profiles_from_selectel(config_repo, selectel_client, project_id, language)
+                finally:
+                    selectel_client.close()
+                _pause(language)
         elif choice == "4":
-            toggle_profile(config_repo, language=language)
+            edit_profile(config_repo, language=language)
         elif choice == "5":
+            toggle_profile(config_repo, language=language)
+        elif choice == "6":
             delete_profile(config_repo, language=language)
         else:
             return
@@ -239,8 +252,14 @@ def add_manual_profile(config_repo: ConfigRepository | None = None, language: st
         console.print(f"[red]{tr(language, 'profile_name_required')}[/red]")
         _pause(language)
         return
+    provider = Prompt.ask(tr(language, "provider"), default="yandex").strip().lower()
+    if provider not in {"yandex", "selectel"}:
+        provider = "yandex"
     folder_id = Prompt.ask(tr(language, "folder_id")).strip()
     instance_id = Prompt.ask(tr(language, "instance_id")).strip()
+    project_id = None
+    if provider == "selectel":
+        project_id = Prompt.ask(tr(language, "project_id")).strip()
     host = Prompt.ask(tr(language, "health_host")).strip()
     interval = _ask_int(language, tr(language, "check_interval"), 60)
     timeout = _ask_int(language, tr(language, "ping_timeout"), 3)
@@ -251,8 +270,10 @@ def add_manual_profile(config_repo: ConfigRepository | None = None, language: st
 
     profile = VMProfile(
         name=name,
+        provider=provider,
         folder_id=folder_id,
         instance_id=instance_id,
+        project_id=project_id,
         check_host=host,
         check_interval_seconds=interval,
         ping_timeout_seconds=timeout,
@@ -533,6 +554,127 @@ def _ensure_service_account(config_repo: ConfigRepository, language: str) -> boo
             return False
 
 
+def _build_selectel_client(config_repo: ConfigRepository, language: str) -> SelectelCloudClient | None:
+    from pathlib import Path
+    config = config_repo.load_app_config()
+    creds_file = Path(config.selectel_credentials_file)
+    
+    if not creds_file.exists():
+        console.print(f"[red]Selectel credentials file not found: {creds_file}[/red]")
+        console.print(f"[yellow]Create a JSON file with: username, password, account_id, project_id[/yellow]")
+        return None
+    
+    try:
+        client = SelectelCloudClient.from_credentials_file(creds_file)
+        if not client.ensure_authenticated():
+            console.print(f"[red]Failed to authenticate with Selectel[/red]")
+            return None
+        return client
+    except Exception as exc:
+        console.print(f"[red]Selectel auth failed: {exc}[/red]")
+        return None
+
+
+def _choose_selectel_project(client: SelectelCloudClient, language: str) -> str | None:
+    try:
+        projects = client.list_projects()
+    except Exception as exc:
+        console.print(f"[red]Failed to list Selectel projects: {exc}[/red]")
+        return None
+    
+    if not projects:
+        console.print(f"[yellow]No Selectel projects found[/yellow]")
+        return None
+    
+    project = _pick_record(
+        language,
+        "Selectel Projects",
+        projects,
+        lambda item: (item.get("name", "unnamed"), item.get("id", "")),
+        ("Name", "Project ID"),
+    )
+    if project is None:
+        return None
+    return project.get("id")
+
+
+def _import_profiles_from_selectel(
+    config_repo: ConfigRepository,
+    client: SelectelCloudClient,
+    project_id: str,
+    language: str,
+) -> None:
+    try:
+        servers = client.list_servers(project_id)
+    except Exception as exc:
+        console.print(f"[red]Failed to list servers: {exc}[/red]")
+        return
+    
+    if not servers:
+        console.print(f"[yellow]No servers found in project[/yellow]")
+        return
+    
+    table = Table(title="Servers in Project", box=box.ROUNDED, border_style="bright_cyan")
+    table.add_column("#", style="bright_white", justify="right")
+    table.add_column(tr(language, "name"), style="bright_cyan")
+    table.add_column(tr(language, "status"), style="bright_white")
+    table.add_column(tr(language, "primary_ip"), style="bright_white")
+    
+    for idx, server in enumerate(servers, start=1):
+        name = server.get("name", "unnamed")
+        status = server.get("status", "UNKNOWN")
+        ip = SelectelCloudClient.extract_primary_ip(server)
+        table.add_row(str(idx), name, status, ip or tr(language, "manual_host_required"))
+    
+    console.print(table)
+    
+    selection = Prompt.ask(tr(language, "select_instances"), default="").strip()
+    if not selection:
+        return
+    
+    indices = _parse_selection(selection, len(servers))
+    if not indices:
+        console.print(f"[red]{tr(language, 'invalid_selection')}[/red]")
+        return
+    
+    interval = _ask_int(language, tr(language, "default_interval"), 60)
+    timeout = _ask_int(language, tr(language, "default_timeout"), 3)
+    
+    existing_ids = {p.instance_id for p in config_repo.list_profiles()}
+    imported = 0
+    
+    for idx in indices:
+        server = servers[idx - 1]
+        server_id = server.get("id", "")
+        name = server.get("name", "unnamed")
+        
+        if server_id in existing_ids:
+            console.print(f"[yellow]{tr(language, 'skip_already_configured', name=name)}[/yellow]")
+            continue
+        
+        ip = SelectelCloudClient.extract_primary_ip(server)
+        if not ip:
+            ip = Prompt.ask(tr(language, "health_host_for", name=name), default="").strip()
+            if not ip:
+                console.print(f"[yellow]{tr(language, 'skip_missing_host', name=name)}[/yellow]")
+                continue
+        
+        profile = VMProfile(
+            name=name,
+            provider="selectel",
+            folder_id=project_id,
+            instance_id=server_id,
+            project_id=project_id,
+            check_host=ip,
+            check_interval_seconds=interval,
+            ping_timeout_seconds=timeout,
+        )
+        config_repo.save_profile(profile)
+        imported += 1
+    
+    console.print(f"[green]{tr(language, 'profiles_imported', count=imported)}[/green]")
+
+
 def _build_cloud_client(config_repo: ConfigRepository, language: str) -> YandexCloudClient | None:
     keys_dir = config_repo.get_keys_dir()
     try:
@@ -658,6 +800,7 @@ def _import_profiles_from_folder(config_repo: ConfigRepository, client: YandexCl
                 continue
         profile = VMProfile(
             name=instance_name,
+            provider="yandex",
             folder_id=folder_id,
             instance_id=instance_id,
             check_host=host,

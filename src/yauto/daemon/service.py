@@ -10,6 +10,7 @@ from typing import Iterable
 
 from yauto import __version__
 from yauto.cloud.client import CloudApiError, YandexCloudClient
+from yauto.cloud.selectel_client import SelectelCloudClient
 from yauto.config.repository import ConfigRepository
 from yauto.daemon.health import ping_host
 from yauto.models import AppState, EventRecord, VMProfile, VMRuntimeState, utc_now
@@ -52,15 +53,6 @@ class MonitorDaemon:
                 profiles = self.config_repo.list_profiles()
                 self._sync_known_profiles(state, profiles)
 
-                try:
-                    service_account_files = self.config_repo.validate_service_account_source()
-                except (FileNotFoundError, OSError, ValueError) as exc:
-                    state.service_state = "needs-setup"
-                    state.message = f"service account source is not ready: {exc}"
-                    self._save_state(state, loop_started)
-                    self._sleep(config.config_reload_seconds)
-                    continue
-
                 enabled_profiles = [profile for profile in profiles if profile.enabled]
                 if not enabled_profiles:
                     state.service_state = "idle"
@@ -69,15 +61,51 @@ class MonitorDaemon:
                     self._sleep(config.config_reload_seconds)
                     continue
 
-                client = YandexCloudClient.from_service_account_files(service_account_files)
+                yandex_profiles = [p for p in enabled_profiles if p.provider == "yandex"]
+                selectel_profiles = [p for p in enabled_profiles if p.provider == "selectel"]
+
+                yandex_client = None
+                selectel_client = None
+
                 try:
+                    if yandex_profiles:
+                        try:
+                            service_account_files = self.config_repo.validate_service_account_source()
+                            yandex_client = YandexCloudClient.from_service_account_files(service_account_files)
+                        except (FileNotFoundError, OSError, ValueError) as exc:
+                            LOGGER.warning("Yandex credentials not available: %s", exc)
+
+                    if selectel_profiles:
+                        from pathlib import Path
+                        selectel_creds_file = Path(config.selectel_credentials_file)
+                        if selectel_creds_file.exists():
+                            selectel_client = SelectelCloudClient.from_credentials_file(selectel_creds_file)
+                        else:
+                            LOGGER.warning("Selectel credentials file not found: %s", selectel_creds_file)
+
+                    if not yandex_client and not selectel_client:
+                        state.service_state = "needs-setup"
+                        state.message = "no cloud credentials configured"
+                        self._save_state(state, loop_started)
+                        self._sleep(config.config_reload_seconds)
+                        continue
+
                     due_profiles = self._select_due_profiles(enabled_profiles, state)
                     for profile in due_profiles:
                         current = state.profiles.get(profile.profile_id) or VMRuntimeState(
                             profile_id=profile.profile_id,
                             name=profile.name,
                         )
-                        updated, events = self._evaluate_profile(profile, current, client, notifier)
+                        
+                        if profile.provider == "yandex" and yandex_client:
+                            updated, events = self._evaluate_yandex_profile(profile, current, yandex_client, notifier)
+                        elif profile.provider == "selectel" and selectel_client:
+                            updated, events = self._evaluate_selectel_profile(profile, current, selectel_client, notifier)
+                        else:
+                            current.status = "error"
+                            current.last_error = f"no client available for provider {profile.provider}"
+                            updated, events = current, []
+                        
                         state.profiles[profile.profile_id] = updated
                         for event in events:
                             self._publish_event(event)
@@ -88,7 +116,10 @@ class MonitorDaemon:
                     self.reload_event.clear()
                     self._sleep(self._compute_sleep_seconds(enabled_profiles, state, config.config_reload_seconds))
                 finally:
-                    client.close()
+                    if yandex_client:
+                        yandex_client.close()
+                    if selectel_client:
+                        selectel_client.close()
             except CloudApiError as exc:
                 LOGGER.exception("cloud API failure")
                 state.service_state = "error"
@@ -132,7 +163,7 @@ class MonitorDaemon:
                 due.append(profile)
         return due
 
-    def _evaluate_profile(
+    def _evaluate_yandex_profile(
         self,
         profile: VMProfile,
         runtime_state: VMRuntimeState,
@@ -287,6 +318,188 @@ class MonitorDaemon:
                         level="ERROR",
                         category="health",
                         message="instance is running but unreachable",
+                        profile_id=profile.profile_id,
+                        profile_name=profile.name,
+                        details={"host": profile.check_host},
+                    )
+                )
+            return runtime_state, events
+
+        runtime_state.status = "error"
+        runtime_state.last_action = "unhandled-status"
+        runtime_state.last_error = f"unhandled cloud status: {runtime_state.cloud_status}"
+        runtime_state.next_check_at = now + timedelta(seconds=profile.check_interval_seconds)
+        if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+            notifier.notify_error(profile.name, runtime_state.last_error)
+            events.append(
+                EventRecord(
+                    level="ERROR",
+                    category="cloud",
+                    message="received unhandled cloud status",
+                    profile_id=profile.profile_id,
+                    profile_name=profile.name,
+                    details={"cloud_status": runtime_state.cloud_status},
+                )
+            )
+        return runtime_state, events
+
+    def _evaluate_selectel_profile(
+        self,
+        profile: VMProfile,
+        runtime_state: VMRuntimeState,
+        client: SelectelCloudClient,
+        notifier: TelegramNotifier,
+    ) -> tuple[VMRuntimeState, list[EventRecord]]:
+        now = utc_now()
+        previous_status = runtime_state.status
+        previous_error = runtime_state.last_error
+        runtime_state.name = profile.name
+        runtime_state.last_check_at = now
+        events: list[EventRecord] = []
+
+        reachable = ping_host(profile.check_host, profile.ping_timeout_seconds)
+        runtime_state.reachable = reachable
+
+        if reachable:
+            runtime_state.status = "online"
+            runtime_state.cloud_status = "ACTIVE"
+            runtime_state.last_error = None
+            runtime_state.last_action = "health-check-ok"
+            runtime_state.consecutive_failures = 0
+            runtime_state.start_attempts = 0
+            runtime_state.last_transition_at = now if previous_status != "online" else runtime_state.last_transition_at
+            runtime_state.next_check_at = now + timedelta(seconds=profile.check_interval_seconds)
+            if previous_status not in {"unknown", "online", "disabled"}:
+                notifier.notify_recovery(profile.name, profile.check_host)
+                events.append(
+                    EventRecord(
+                        level="INFO",
+                        category="recovery",
+                        message="profile recovered",
+                        profile_id=profile.profile_id,
+                        profile_name=profile.name,
+                        details={"host": profile.check_host},
+                    )
+                )
+            return runtime_state, events
+
+        runtime_state.consecutive_failures += 1
+
+        try:
+            if not profile.project_id:
+                raise RuntimeError("project_id is required for Selectel profiles")
+            cloud_status = client.get_server_status(profile.project_id, profile.instance_id)
+            runtime_state.cloud_status = cloud_status
+        except Exception as exc:
+            runtime_state.status = "error"
+            runtime_state.last_error = str(exc)
+            runtime_state.last_action = "cloud-status-failed"
+            runtime_state.next_check_at = now + timedelta(seconds=min(profile.check_interval_seconds, 60))
+            if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                notifier.notify_error(profile.name, runtime_state.last_error)
+                events.append(
+                    EventRecord(
+                        level="ERROR",
+                        category="cloud",
+                        message="failed to fetch server status",
+                        profile_id=profile.profile_id,
+                        profile_name=profile.name,
+                        details={"error": runtime_state.last_error},
+                    )
+                )
+            return runtime_state, events
+
+        if runtime_state.cloud_status in {"BUILD", "REBOOT"}:
+            runtime_state.status = "starting"
+            runtime_state.last_error = None
+            runtime_state.last_action = "waiting-for-cloud-start"
+            runtime_state.last_transition_at = now if previous_status != "starting" else runtime_state.last_transition_at
+            runtime_state.next_check_at = now + timedelta(seconds=max(30, min(profile.startup_grace_seconds, profile.check_interval_seconds)))
+            if previous_status != runtime_state.status:
+                events.append(
+                    EventRecord(
+                        level="INFO",
+                        category="monitor",
+                        message="server is already starting",
+                        profile_id=profile.profile_id,
+                        profile_name=profile.name,
+                        details={"cloud_status": runtime_state.cloud_status},
+                    )
+                )
+            return runtime_state, events
+
+        if runtime_state.cloud_status == "SHUTOFF":
+            if not profile.auto_start_stopped:
+                runtime_state.status = "stopped"
+                runtime_state.last_action = "auto-start-disabled"
+                runtime_state.last_error = "server is stopped and auto-start is disabled"
+                runtime_state.next_check_at = now + timedelta(seconds=profile.check_interval_seconds)
+                if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                    notifier.notify_error(profile.name, runtime_state.last_error)
+                    events.append(
+                        EventRecord(
+                            level="WARN",
+                            category="monitor",
+                            message="server is stopped but auto-start is disabled",
+                            profile_id=profile.profile_id,
+                            profile_name=profile.name,
+                        )
+                    )
+                return runtime_state, events
+
+            if runtime_state.start_attempts >= profile.max_start_attempts:
+                runtime_state.status = "cooldown"
+                runtime_state.last_action = "cooldown"
+                runtime_state.last_error = "max start attempts reached"
+                runtime_state.start_attempts = 0
+                runtime_state.next_check_at = now + timedelta(seconds=profile.cooldown_seconds)
+                if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                    notifier.notify_error(profile.name, runtime_state.last_error)
+                    events.append(
+                        EventRecord(
+                            level="WARN",
+                            category="cooldown",
+                            message="profile entered cooldown",
+                            profile_id=profile.profile_id,
+                            profile_name=profile.name,
+                            details={"cooldown_seconds": profile.cooldown_seconds},
+                        )
+                    )
+                return runtime_state, events
+
+            server_id = client.start_server(profile.project_id, profile.instance_id)
+            runtime_state.status = "starting"
+            runtime_state.start_attempts += 1
+            runtime_state.last_action = "start-issued"
+            runtime_state.last_operation_id = server_id
+            runtime_state.last_error = None
+            runtime_state.last_transition_at = now
+            runtime_state.next_check_at = now + timedelta(seconds=profile.startup_grace_seconds)
+            notifier.notify_start(profile.name, profile.check_host, server_id)
+            events.append(
+                EventRecord(
+                    level="WARN",
+                    category="start",
+                    message="start command issued",
+                    profile_id=profile.profile_id,
+                    profile_name=profile.name,
+                    details={"operation_id": server_id, "host": profile.check_host},
+                )
+            )
+            return runtime_state, events
+
+        if runtime_state.cloud_status == "ACTIVE":
+            runtime_state.status = "degraded"
+            runtime_state.last_action = "running-but-unreachable"
+            runtime_state.last_error = "server is ACTIVE but the health check host is unreachable"
+            runtime_state.next_check_at = now + timedelta(seconds=profile.check_interval_seconds)
+            if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                notifier.notify_error(profile.name, runtime_state.last_error)
+                events.append(
+                    EventRecord(
+                        level="ERROR",
+                        category="health",
+                        message="server is active but unreachable",
                         profile_id=profile.profile_id,
                         profile_name=profile.name,
                         details={"host": profile.check_host},
