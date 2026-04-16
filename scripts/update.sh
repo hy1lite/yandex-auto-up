@@ -22,17 +22,29 @@ echo "Pulling latest changes from GitHub..."
 git pull origin main
 echo ""
 
-# Копирование файлов
-echo "Copying updated files to /opt/yandex-auto-up/app/..."
-rm -rf /opt/yandex-auto-up/app/yauto
-cp -r src/yauto /opt/yandex-auto-up/app/
-echo "Files copied successfully"
+# Останови сервис
+echo "Stopping service..."
+systemctl stop yandex-auto-up
 echo ""
 
-# Перезапуск сервиса
-echo "Restarting yandex-auto-up service..."
-systemctl restart yandex-auto-up
-echo "Service restarted"
+# Удали весь Python кеш
+echo "Removing Python cache..."
+find "$PROJECT_DIR/src" -type f -name "*.pyc" -delete 2>/dev/null || true
+find "$PROJECT_DIR/src" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find /opt/yandex-auto-up -type f -name "*.pyc" -delete 2>/dev/null || true
+find /opt/yandex-auto-up -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+echo "Cache cleared"
+echo ""
+
+# Переустанови пакет
+echo "Reinstalling package..."
+/opt/yandex-auto-up/venv/bin/pip uninstall -y yandex-auto-up 2>/dev/null || true
+/opt/yandex-auto-up/venv/bin/pip install -e "$PROJECT_DIR"
+echo ""
+
+# Запусти сервис
+echo "Starting service..."
+systemctl start yandex-auto-up
 echo ""
 
 # Проверка статуса
