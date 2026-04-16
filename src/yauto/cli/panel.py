@@ -138,114 +138,131 @@ def run_setup_wizard(
     config_repo = config_repo or ConfigRepository()
     runtime_repo = runtime_repo or RuntimeRepository(config_repo.paths)
     language = _resolve_language(config_repo, language)
-    console.clear()
-    console.print(Panel.fit(f"[bold bright_cyan]{tr(language, 'setup_title')}[/bold bright_cyan]\n[grey70]{tr(language, 'setup_subtitle')}[/grey70]", border_style="bright_cyan", box=box.ROUNDED, padding=(1, 2)))
-
-    # Выбор провайдера
-    console.print()
-    console.print(
-        _menu_table(
-            language,
-            tr(language, "setup_choose_provider"),
-            [
-                ("1", tr(language, "setup_yandex"), tr(language, "setup_yandex_desc")),
-                ("2", tr(language, "setup_selectel"), tr(language, "setup_selectel_desc")),
-                ("3", tr(language, "setup_both"), tr(language, "setup_both_desc")),
-                ("0", tr(language, "action_back"), tr(language, "why_back")),
-            ],
+    
+    while True:
+        console.clear()
+        console.print(Panel.fit(f"[bold bright_cyan]{tr(language, 'setup_title')}[/bold bright_cyan]\n[grey70]{tr(language, 'setup_subtitle')}[/grey70]", border_style="bright_cyan", box=box.ROUNDED, padding=(1, 2)))
+        
+        console.print()
+        console.print(
+            _menu_table(
+                language,
+                tr(language, "setup_menu"),
+                [
+                    ("1", tr(language, "setup_yandex"), tr(language, "setup_yandex_desc")),
+                    ("2", tr(language, "setup_selectel"), tr(language, "setup_selectel_desc")),
+                    ("3", tr(language, "setup_telegram_menu"), tr(language, "setup_telegram_desc")),
+                    ("4", tr(language, "setup_service_menu"), tr(language, "setup_service_desc")),
+                    ("0", tr(language, "action_exit"), tr(language, "why_exit")),
+                ],
+            )
         )
-    )
+        
+        choice = Prompt.ask(tr(language, "select_action"), choices=["1", "2", "3", "4", "0"], default="0")
+        
+        if choice == "0":
+            break
+        elif choice == "1":
+            _setup_yandex_cloud(config_repo, language)
+        elif choice == "2":
+            _setup_selectel_cloud(config_repo, language)
+        elif choice == "3":
+            if Confirm.ask(tr(language, "setup_configure_telegram"), default=False):
+                configure_telegram(config_repo, language=language)
+            _pause(language)
+        elif choice == "4":
+            _setup_service(config_repo, language)
+
+
+def _setup_yandex_cloud(config_repo: ConfigRepository, language: str) -> None:
+    console.clear()
+    console.print(Panel.fit(f"[bold cyan]{tr(language, 'setup_configuring_yandex')}[/bold cyan]", border_style="cyan", box=box.ROUNDED, padding=(1, 2)))
     
-    provider_choice = Prompt.ask(tr(language, "select_action"), choices=["1", "2", "3", "0"], default="1")
-    
-    if provider_choice == "0":
+    if not _ensure_service_account(config_repo, language):
+        _pause(language)
         return
-    
-    imported_total = 0
-    
-    # Настройка Yandex Cloud
-    if provider_choice in ["1", "3"]:
-        console.print()
-        console.print(f"[bold cyan]{tr(language, 'setup_configuring_yandex')}[/bold cyan]")
-        if _ensure_service_account(config_repo, language):
-            client = _build_cloud_client(config_repo, language)
-            if client is not None:
-                try:
-                    folder_id = _choose_folder(client, language)
-                    if folder_id:
-                        imported = _import_profiles_from_folder(config_repo, client, folder_id, language)
-                        imported_total += imported
-                finally:
-                    client.close()
-        else:
-            console.print(f"[yellow]{tr(language, 'setup_yandex_skipped')}[/yellow]")
-    
-    # Настройка Selectel
-    if provider_choice in ["2", "3"]:
-        console.print()
-        console.print(f"[bold cyan]{tr(language, 'setup_configuring_selectel')}[/bold cyan]")
-        
-        from pathlib import Path
-        config = config_repo.load_app_config()
-        creds_file = Path(config.selectel_credentials_file)
-        
-        if not creds_file.exists():
-            console.print(f"[yellow]{tr(language, 'setup_selectel_no_creds')}[/yellow]")
-            console.print(f"[grey70]{tr(language, 'setup_selectel_creds_path')}: {creds_file}[/grey70]")
-            
-            if Confirm.ask(tr(language, "setup_selectel_create_creds"), default=True):
-                username = Prompt.ask(tr(language, "selectel_username"))
-                password = Prompt.ask(tr(language, "selectel_password"), password=True)
-                account_id = Prompt.ask(tr(language, "selectel_account_id"))
-                project_id = Prompt.ask(tr(language, "selectel_project_id"), default="")
-                
-                creds_data = {
-                    "username": username,
-                    "password": password,
-                    "account_id": account_id,
-                }
-                if project_id:
-                    creds_data["project_id"] = project_id
-                
-                import json
-                creds_file.parent.mkdir(parents=True, exist_ok=True)
-                creds_file.write_text(json.dumps(creds_data, indent=2))
-                console.print(f"[green]{tr(language, 'setup_selectel_creds_saved')}[/green]")
-        
-        selectel_client = _build_selectel_client(config_repo, language)
-        if selectel_client is not None:
-            try:
-                project_id = _choose_selectel_project(selectel_client, language)
-                if project_id:
-                    _import_profiles_from_selectel(config_repo, selectel_client, project_id, language)
-                    imported_total += 1
-            finally:
-                selectel_client.close()
-        else:
-            console.print(f"[yellow]{tr(language, 'setup_selectel_skipped')}[/yellow]")
 
-    if Confirm.ask(tr(language, "setup_configure_telegram"), default=False):
-        configure_telegram(config_repo, language=language)
+    imported = 0
+    client = _build_cloud_client(config_repo, language)
+    if client is not None:
+        try:
+            folder_id = _choose_folder(client, language)
+            if folder_id:
+                imported = _import_profiles_from_folder(config_repo, client, folder_id, language)
+        finally:
+            client.close()
+    
+    console.print()
+    console.print(f"[green]{tr(language, 'setup_imported', count=imported)}[/green]")
+    _pause(language)
 
+
+def _setup_selectel_cloud(config_repo: ConfigRepository, language: str) -> None:
+    console.clear()
+    console.print(Panel.fit(f"[bold cyan]{tr(language, 'setup_configuring_selectel')}[/bold cyan]", border_style="cyan", box=box.ROUNDED, padding=(1, 2)))
+    
+    from pathlib import Path
     config = config_repo.load_app_config()
+    creds_file = Path(config.selectel_credentials_file)
+    
+    if not creds_file.exists():
+        console.print(f"[yellow]{tr(language, 'setup_selectel_no_creds')}[/yellow]")
+        console.print(f"[grey70]{tr(language, 'setup_selectel_creds_path')}: {creds_file}[/grey70]")
+        console.print()
+        
+        if Confirm.ask(tr(language, "setup_selectel_create_creds"), default=True):
+            username = Prompt.ask(tr(language, "selectel_username"))
+            password = Prompt.ask(tr(language, "selectel_password"), password=True)
+            account_id = Prompt.ask(tr(language, "selectel_account_id"))
+            project_id = Prompt.ask(tr(language, "selectel_project_id"), default="")
+            
+            creds_data = {
+                "username": username,
+                "password": password,
+                "account_id": account_id,
+            }
+            if project_id:
+                creds_data["project_id"] = project_id
+            
+            import json
+            creds_file.parent.mkdir(parents=True, exist_ok=True)
+            creds_file.write_text(json.dumps(creds_data, indent=2))
+            console.print(f"[green]{tr(language, 'setup_selectel_creds_saved')}[/green]")
+        else:
+            _pause(language)
+            return
+    
+    imported = 0
+    selectel_client = _build_selectel_client(config_repo, language)
+    if selectel_client is not None:
+        try:
+            project_id = _choose_selectel_project(selectel_client, language)
+            if project_id:
+                _import_profiles_from_selectel(config_repo, selectel_client, project_id, language)
+                imported = 1
+        finally:
+            selectel_client.close()
+    
+    console.print()
+    console.print(f"[green]{tr(language, 'setup_imported', count=imported)}[/green]")
+    _pause(language)
+
+
+def _setup_service(config_repo: ConfigRepository, language: str) -> None:
+    console.clear()
+    console.print(Panel.fit(f"[bold cyan]{tr(language, 'setup_service_menu')}[/bold cyan]", border_style="cyan", box=box.ROUNDED, padding=(1, 2)))
+    
+    config = config_repo.load_app_config()
+    
     if Confirm.ask(tr(language, "setup_enable_autostart"), default=True):
         ok, message = run_service_action(config.service_name, "enable")
         console.print(f"[{'green' if ok else 'red'}]{message}[/{'green' if ok else 'red'}]")
+    
     if Confirm.ask(tr(language, "setup_start_service"), default=True):
         action = "restart" if get_service_status(config.service_name).active else "start"
         ok, message = run_service_action(config.service_name, action)
         console.print(f"[{'green' if ok else 'red'}]{message}[/{'green' if ok else 'red'}]")
-
-    console.print()
-    console.print(
-        Panel.fit(
-            f"[bold green]{tr(language, 'setup_complete')}[/bold green]\n"
-            f"{tr(language, 'setup_imported', count=imported_total)}",
-            border_style="green",
-            box=box.ROUNDED,
-            padding=(1, 2),
-        )
-    )
+    
     _pause(language)
 
 
