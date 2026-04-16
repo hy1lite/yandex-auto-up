@@ -12,16 +12,14 @@ from yauto.cloud.selectel_auth import SelectelTokenProvider
 
 
 class SelectelCloudClient:
-    def __init__(self, token_provider: SelectelTokenProvider, region: str = "ru-1", timeout: float = 10.0):
+    def __init__(self, token_provider: SelectelTokenProvider, region: str = "ru-3", timeout: float = 10.0):
         self.token_provider = token_provider
         self.region = region
         self.timeout = timeout
         self.http = httpx.Client(timeout=timeout, headers={"User-Agent": f"yauto/{__version__}"})
-        # Compute endpoint will be discovered from service catalog
-        self.compute_endpoint = None
 
     @classmethod
-    def from_credentials_file(cls, credentials_file: Path, region: str = "ru-1", timeout: float = 10.0) -> SelectelCloudClient:
+    def from_credentials_file(cls, credentials_file: Path, region: str = "ru-3", timeout: float = 10.0) -> SelectelCloudClient:
         provider = SelectelTokenProvider(credentials_file, timeout=timeout)
         return cls(provider, region=region, timeout=timeout)
 
@@ -45,47 +43,38 @@ class SelectelCloudClient:
         data = response.json()
         return data.get("projects", [])
 
-    def _get_compute_endpoint(self) -> str:
-        """Get compute endpoint from service catalog."""
-        if self.compute_endpoint:
-            return self.compute_endpoint
+    def _get_compute_endpoint(self, project_id: str) -> str:
+        """Get compute endpoint from service catalog for the project's region."""
+        # Get project-scoped token which includes service catalog
+        token_data = self.token_provider.get_token_with_catalog(project_id)
+        token = token_data.get("token")
+        catalog = token_data.get("catalog", [])
         
-        # Get project-scoped token and service catalog
-        token = self.token_provider.get_token(project_scoped=True)
-        
-        # Get service catalog from Keystone
-        url = "https://cloud.api.selcloud.ru/identity/v3/auth/catalog"
-        response = self.http.get(url, headers={"X-Auth-Token": token})
-        response.raise_for_status()
-        
-        catalog = response.json().get("catalog", [])
-        
-        # Find compute service endpoint for any region (prefer self.region if available)
-        compute_endpoints = []
+        # Find compute service endpoint
         for service in catalog:
             if service.get("type") == "compute":
                 for endpoint in service.get("endpoints", []):
                     if endpoint.get("interface") == "public":
-                        compute_endpoints.append(endpoint)
-                        # Prefer specified region
-                        if endpoint.get("region") == self.region:
-                            self.compute_endpoint = endpoint.get("url")
-                            return self.compute_endpoint
+                        url = endpoint.get("url", "")
+                        # OpenStack compute endpoint format: https://{region}.cloud.api.selcloud.ru/compute/v2.1/{project_id}
+                        # We need to use the URL as-is from catalog
+                        return url
         
-        # If no endpoint for specified region, use first available
-        if compute_endpoints:
-            self.compute_endpoint = compute_endpoints[0].get("url")
-            return self.compute_endpoint
-        
-        # Fallback to default
-        self.compute_endpoint = f"https://{self.region}.cloud.api.selcloud.ru/compute/v2.1"
-        return self.compute_endpoint
+        # Fallback: try to detect region from project and construct URL
+        # For Selectel, regions are: ru-1, ru-2, ru-3, ru-7, ru-8, ru-9, etc.
+        # Default to ru-3 if not specified
+        region = self.region or "ru-3"
+        return f"https://{region}.cloud.api.selcloud.ru/compute/v2.1/{project_id}"
 
     def list_servers(self, project_id: str) -> list[dict[str, Any]]:
-        # Get project-scoped token
-        token = self._get_token()
-        # Use discovered compute endpoint
-        compute_url = self._get_compute_endpoint()
+        # Get project-scoped token with catalog
+        token_data = self.token_provider.get_token_with_catalog(project_id)
+        token = token_data.get("token")
+        
+        # Get compute endpoint from catalog
+        compute_url = self._get_compute_endpoint(project_id)
+        
+        # OpenStack Nova API: GET /servers/detail
         url = f"{compute_url}/servers/detail"
         response = self.http.get(url, headers={"X-Auth-Token": token})
         response.raise_for_status()
@@ -93,8 +82,10 @@ class SelectelCloudClient:
         return data.get("servers", [])
 
     def get_server(self, project_id: str, server_id: str) -> dict[str, Any]:
-        token = self._get_token()
-        url = f"https://cloud.api.selcloud.ru/compute/v2.1/servers/{server_id}"
+        token_data = self.token_provider.get_token_with_catalog(project_id)
+        token = token_data.get("token")
+        compute_url = self._get_compute_endpoint(project_id)
+        url = f"{compute_url}/servers/{server_id}"
         response = self.http.get(url, headers={"X-Auth-Token": token})
         response.raise_for_status()
         data = response.json()
@@ -105,8 +96,10 @@ class SelectelCloudClient:
         return server.get("status", "UNKNOWN")
 
     def start_server(self, project_id: str, server_id: str) -> str:
-        token = self._get_token()
-        url = f"https://cloud.api.selcloud.ru/compute/v2.1/servers/{server_id}/action"
+        token_data = self.token_provider.get_token_with_catalog(project_id)
+        token = token_data.get("token")
+        compute_url = self._get_compute_endpoint(project_id)
+        url = f"{compute_url}/servers/{server_id}/action"
         response = self.http.post(
             url,
             headers={"X-Auth-Token": token, "Content-Type": "application/json"},

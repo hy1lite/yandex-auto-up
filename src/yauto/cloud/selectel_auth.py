@@ -17,6 +17,7 @@ SELECTEL_AUTH_URL = "https://cloud.api.selcloud.ru/identity/v3/auth/tokens"
 class CachedToken:
     token: str
     expires_at: datetime
+    catalog: list[dict] | None = None
 
 
 class SelectelTokenProvider:
@@ -33,11 +34,19 @@ class SelectelTokenProvider:
         return SelectelCredentials.model_validate_json(payload)
 
     def get_token(self, project_scoped: bool = True) -> str:
+        token_data = self.get_token_with_catalog(project_scoped=project_scoped)
+        return token_data.get("token")
+    
+    def get_token_with_catalog(self, project_id: str | None = None, project_scoped: bool = True) -> dict:
+        """Get token with service catalog. Returns dict with 'token' and 'catalog' keys."""
         now = datetime.now(timezone.utc)
         if self._cached and self._cached.expires_at - now > timedelta(seconds=60):
-            return self._cached.token
+            return {"token": self._cached.token, "catalog": self._cached.catalog or []}
 
         creds = self.load_credentials()
+        
+        # Use provided project_id or fall back to credentials
+        target_project_id = project_id or creds.project_id
         
         auth_payload = {
             "auth": {
@@ -54,10 +63,10 @@ class SelectelTokenProvider:
             }
         }
 
-        if project_scoped and creds.project_id:
+        if project_scoped and target_project_id:
             auth_payload["auth"]["scope"] = {
                 "project": {
-                    "id": creds.project_id
+                    "id": target_project_id
                 }
             }
         else:
@@ -76,5 +85,9 @@ class SelectelTokenProvider:
         if not token:
             raise RuntimeError("No X-Subject-Token in response")
         
-        self._cached = CachedToken(token=token, expires_at=now + timedelta(hours=23))
-        return token
+        # Extract service catalog from response body
+        response_data = response.json()
+        catalog = response_data.get("token", {}).get("catalog", [])
+        
+        self._cached = CachedToken(token=token, expires_at=now + timedelta(hours=23), catalog=catalog)
+        return {"token": token, "catalog": catalog}

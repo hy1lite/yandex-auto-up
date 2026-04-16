@@ -704,6 +704,42 @@ def _choose_selectel_project(client: SelectelCloudClient, language: str) -> str 
     return project.get("id")
 
 
+def _create_selectel_profile_manually(config_repo: ConfigRepository, project_id: str, language: str) -> None:
+    console.print(f"[cyan]Creating Selectel profile manually...[/cyan]")
+    console.print()
+    
+    name = Prompt.ask("Server name").strip()
+    if not name:
+        console.print(f"[red]Name is required[/red]")
+        return
+    
+    instance_id = Prompt.ask("Server ID").strip()
+    if not instance_id:
+        console.print(f"[red]Server ID is required[/red]")
+        return
+    
+    check_host = Prompt.ask("IP address for health check").strip()
+    if not check_host:
+        console.print(f"[red]IP address is required[/red]")
+        return
+    
+    interval = _ask_int(language, "Check interval seconds", 60)
+    timeout = _ask_int(language, "Ping timeout seconds", 3)
+    
+    profile = VMProfile(
+        name=name,
+        provider="selectel",
+        folder_id=project_id,
+        instance_id=instance_id,
+        project_id=project_id,
+        check_host=check_host,
+        check_interval_seconds=interval,
+        ping_timeout_seconds=timeout,
+    )
+    config_repo.save_profile(profile)
+    console.print(f"[green]Profile {name} created successfully![/green]")
+
+
 def _import_profiles_from_selectel(
     config_repo: ConfigRepository,
     client: SelectelCloudClient,
