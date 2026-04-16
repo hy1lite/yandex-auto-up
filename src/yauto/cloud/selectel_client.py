@@ -45,9 +45,10 @@ class SelectelCloudClient:
         return data.get("projects", [])
 
     def list_servers(self, project_id: str) -> list[dict[str, Any]]:
+        # Get project-scoped token
         token = self._get_token()
-        # Use OpenStack Nova API to list servers
-        url = f"https://cloud.api.selcloud.ru/compute/v2.1/{project_id}/servers/detail"
+        # Use OpenStack Nova API - project_id is in token scope, not URL
+        url = "https://cloud.api.selcloud.ru/compute/v2.1/servers/detail"
         response = self.http.get(url, headers={"X-Auth-Token": token})
         response.raise_for_status()
         data = response.json()
@@ -55,7 +56,7 @@ class SelectelCloudClient:
 
     def get_server(self, project_id: str, server_id: str) -> dict[str, Any]:
         token = self._get_token()
-        url = f"https://cloud.api.selcloud.ru/compute/v2.1/{project_id}/servers/{server_id}"
+        url = f"https://cloud.api.selcloud.ru/compute/v2.1/servers/{server_id}"
         response = self.http.get(url, headers={"X-Auth-Token": token})
         response.raise_for_status()
         data = response.json()
@@ -67,7 +68,7 @@ class SelectelCloudClient:
 
     def start_server(self, project_id: str, server_id: str) -> str:
         token = self._get_token()
-        url = f"https://cloud.api.selcloud.ru/compute/v2.1/{project_id}/servers/{server_id}/action"
+        url = f"https://cloud.api.selcloud.ru/compute/v2.1/servers/{server_id}/action"
         response = self.http.post(
             url,
             headers={"X-Auth-Token": token, "Content-Type": "application/json"},
