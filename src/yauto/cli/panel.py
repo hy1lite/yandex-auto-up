@@ -726,6 +726,9 @@ def _import_profiles_from_selectel(
     
     if not servers:
         console.print(f"[yellow]No servers found in project[/yellow]")
+        console.print()
+        if Confirm.ask("Create profile manually?", default=True):
+            _create_selectel_profile_manually(config_repo, project_id, language)
         return
     
     table = Table(title="Servers in Project", box=box.ROUNDED, border_style="bright_cyan")
