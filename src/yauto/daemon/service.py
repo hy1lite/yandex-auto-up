@@ -387,14 +387,6 @@ class MonitorDaemon:
                 )
             )
             return runtime_state, events
-                    category="start",
-                    message="start command issued",
-                    profile_id=profile.profile_id,
-                    profile_name=profile.name,
-                    details={"operation_id": operation_id, "host": profile.check_host},
-                )
-            )
-            return runtime_state, events
 
         if runtime_state.cloud_status == "RUNNING":
             runtime_state.status = "degraded"
