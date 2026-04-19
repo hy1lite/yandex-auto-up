@@ -301,6 +301,96 @@ class MonitorDaemon:
                     message="start command issued",
                     profile_id=profile.profile_id,
                     profile_name=profile.name,
+                    details={"operation_id": operation_id, "attempt": runtime_state.start_attempts},
+                )
+            )
+            return runtime_state, events
+        
+        # Handle SHELVED_OFFLOADED status (frozen server in Selectel)
+        if runtime_state.cloud_status == "SHELVED_OFFLOADED":
+            if not profile.auto_start_stopped:
+                runtime_state.status = "frozen"
+                runtime_state.last_action = "auto-unshelve-disabled"
+                runtime_state.last_error = "instance is frozen and auto-start is disabled"
+                runtime_state.next_check_at = now + timedelta(seconds=profile.check_interval_seconds)
+                if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                    notifier.notify_error(profile.name, runtime_state.last_error)
+                    events.append(
+                        EventRecord(
+                            level="WARN",
+                            category="monitor",
+                            message="instance is frozen but auto-start is disabled",
+                            profile_id=profile.profile_id,
+                            profile_name=profile.name,
+                        )
+                    )
+                return runtime_state, events
+
+            if runtime_state.start_attempts >= profile.max_start_attempts:
+                runtime_state.status = "cooldown"
+                runtime_state.last_action = "cooldown"
+                runtime_state.last_error = "max unshelve attempts reached"
+                runtime_state.start_attempts = 0
+                runtime_state.next_check_at = now + timedelta(seconds=profile.cooldown_seconds)
+                if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                    notifier.notify_error(profile.name, runtime_state.last_error)
+                    events.append(
+                        EventRecord(
+                            level="WARN",
+                            category="cooldown",
+                            message="profile entered cooldown after unshelve attempts",
+                            profile_id=profile.profile_id,
+                            profile_name=profile.name,
+                            details={"cooldown_seconds": profile.cooldown_seconds},
+                        )
+                    )
+                return runtime_state, events
+
+            # Unshelve (unfreeze) the server
+            try:
+                operation_id = client.unshelve_instance(profile.instance_id)
+            except Exception as exc:
+                runtime_state.status = "error"
+                runtime_state.last_error = f"Failed to unshelve instance: {exc}"
+                runtime_state.last_action = "unshelve-failed"
+                runtime_state.next_check_at = now + timedelta(seconds=min(profile.check_interval_seconds, 60))
+                if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                    notifier.notify_error(profile.name, runtime_state.last_error)
+                    events.append(
+                        EventRecord(
+                            level="ERROR",
+                            category="start",
+                            message="unshelve command failed",
+                            profile_id=profile.profile_id,
+                            profile_name=profile.name,
+                            details={"error": str(exc)},
+                        )
+                    )
+                return runtime_state, events
+            
+            runtime_state.status = "starting"
+            runtime_state.start_attempts += 1
+            runtime_state.last_action = "unshelve-issued"
+            runtime_state.last_operation_id = operation_id
+            runtime_state.last_error = None
+            runtime_state.last_transition_at = now
+            runtime_state.next_check_at = now + timedelta(seconds=profile.startup_grace_seconds)
+            notifier.notify_start(profile.name, profile.check_host, operation_id)
+            events.append(
+                EventRecord(
+                    level="WARN",
+                    category="start",
+                    message="unshelve command issued",
+                    profile_id=profile.profile_id,
+                    profile_name=profile.name,
+                    details={"operation_id": operation_id, "attempt": runtime_state.start_attempts},
+                )
+            )
+            return runtime_state, events
+                    category="start",
+                    message="start command issued",
+                    profile_id=profile.profile_id,
+                    profile_name=profile.name,
                     details={"operation_id": operation_id, "host": profile.check_host},
                 )
             )
@@ -477,6 +567,77 @@ class MonitorDaemon:
             runtime_state.next_check_at = now + timedelta(seconds=profile.startup_grace_seconds)
             notifier.notify_start(profile.name, profile.check_host, server_id)
             events.append(
+                EventRecord(
+                    level="WARN",
+                    category="start",
+                    message="start command issued",
+                    profile_id=profile.profile_id,
+                    profile_name=profile.name,
+                    details={"operation_id": server_id, "attempt": runtime_state.start_attempts},
+                )
+            )
+            return runtime_state, events
+        
+        # Handle SHELVED_OFFLOADED status (frozen server in Selectel)
+        if runtime_state.cloud_status == "SHELVED_OFFLOADED":
+            if not profile.auto_start_stopped:
+                runtime_state.status = "frozen"
+                runtime_state.last_action = "auto-unshelve-disabled"
+                runtime_state.last_error = "server is frozen and auto-start is disabled"
+                runtime_state.next_check_at = now + timedelta(seconds=profile.check_interval_seconds)
+                if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                    notifier.notify_error(profile.name, runtime_state.last_error)
+                    events.append(
+                        EventRecord(
+                            level="WARN",
+                            category="monitor",
+                            message="server is frozen but auto-start is disabled",
+                            profile_id=profile.profile_id,
+                            profile_name=profile.name,
+                        )
+                    )
+                return runtime_state, events
+
+            if runtime_state.start_attempts >= profile.max_start_attempts:
+                runtime_state.status = "cooldown"
+                runtime_state.last_action = "cooldown"
+                runtime_state.last_error = "max unshelve attempts reached"
+                runtime_state.start_attempts = 0
+                runtime_state.next_check_at = now + timedelta(seconds=profile.cooldown_seconds)
+                if previous_status != runtime_state.status or previous_error != runtime_state.last_error:
+                    notifier.notify_error(profile.name, runtime_state.last_error)
+                    events.append(
+                        EventRecord(
+                            level="WARN",
+                            category="cooldown",
+                            message="profile entered cooldown after unshelve attempts",
+                            profile_id=profile.profile_id,
+                            profile_name=profile.name,
+                            details={"cooldown_seconds": profile.cooldown_seconds},
+                        )
+                    )
+                return runtime_state, events
+
+            server_id = client.unshelve_server(profile.project_id, profile.instance_id)
+            runtime_state.status = "starting"
+            runtime_state.start_attempts += 1
+            runtime_state.last_action = "unshelve-issued"
+            runtime_state.last_operation_id = server_id
+            runtime_state.last_error = None
+            runtime_state.last_transition_at = now
+            runtime_state.next_check_at = now + timedelta(seconds=profile.startup_grace_seconds)
+            notifier.notify_start(profile.name, profile.check_host, server_id)
+            events.append(
+                EventRecord(
+                    level="WARN",
+                    category="start",
+                    message="unshelve command issued",
+                    profile_id=profile.profile_id,
+                    profile_name=profile.name,
+                    details={"operation_id": server_id, "attempt": runtime_state.start_attempts},
+                )
+            )
+            return runtime_state, events
                 EventRecord(
                     level="WARN",
                     category="start",

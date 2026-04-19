@@ -190,6 +190,49 @@ class SelectelCloudClient:
                 continue
         
         raise RuntimeError(f"Failed to start server {server_id} in any region")
+    
+    def unshelve_server(self, project_id: str, server_id: str) -> str:
+        """Unshelve (unfreeze) a frozen server."""
+        token_data = self.token_provider.get_token_with_catalog(project_id)
+        token = token_data.get("token")
+        catalog = token_data.get("catalog", [])
+        
+        # Get all available regions
+        regions = self._get_all_regions_from_catalog(catalog)
+        
+        # Try to unshelve server in each region
+        for region in regions:
+            # Find compute endpoint for this region
+            compute_url = None
+            for service in catalog:
+                if service.get("type") == "compute":
+                    for endpoint in service.get("endpoints", []):
+                        if endpoint.get("interface") == "public" and endpoint.get("region") == region:
+                            compute_url = endpoint.get("url", "")
+                            break
+                    if compute_url:
+                        break
+            
+            if not compute_url:
+                continue
+            
+            # Remove trailing slash to avoid double slashes
+            compute_url = compute_url.rstrip('/')
+            
+            # Try to unshelve server in this region
+            url = f"{compute_url}/servers/{server_id}/action"
+            try:
+                response = self.http.post(
+                    url,
+                    headers={"X-Auth-Token": token, "Content-Type": "application/json"},
+                    json={"unshelve": None}
+                )
+                if response.status_code in (200, 202):
+                    return server_id
+            except Exception:
+                continue
+        
+        raise RuntimeError(f"Failed to unshelve server {server_id} in any region")
 
     @staticmethod
     def extract_primary_ip(server: dict[str, Any]) -> str:
