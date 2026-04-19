@@ -630,16 +630,6 @@ class MonitorDaemon:
                 )
             )
             return runtime_state, events
-                EventRecord(
-                    level="WARN",
-                    category="start",
-                    message="start command issued",
-                    profile_id=profile.profile_id,
-                    profile_name=profile.name,
-                    details={"operation_id": server_id, "host": profile.check_host},
-                )
-            )
-            return runtime_state, events
 
         if runtime_state.cloud_status == "ACTIVE":
             runtime_state.status = "degraded"
